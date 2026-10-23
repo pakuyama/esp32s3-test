@@ -86,4 +86,3 @@ ESP32에는 Tailscale을 설치할 수 없어서, PC가 중간에서 영상을 �
 - Tailscale 실시간 스트리밍 실제 속도 측정
 - 필요 없어지면 PC 방화벽 규칙("ESP32 camera relay (TCP 8090)")과 Tailscale Serve(:8443) 정리
 - Supabase 권한을 로그인 사용자만 조작하도록 강화
-- `BLE.md`가 비어 있음 → 요구사항이 있으면 채우기
