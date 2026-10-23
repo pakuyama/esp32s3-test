@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XIAO ESP32-S3</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --text:#1d2330; --muted:#6b7280; --on:#f59e0b; --off:#d1d5db; --accent:#2563eb; --ok:#16a34a; --bad:#dc2626; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111318; --card:#1b1f27; --text:#e5e7eb; --muted:#9ca3af; --off:#374151; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:480px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:1.3rem; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:.85rem; margin-bottom:20px; display:flex; align-items:center; gap:6px; }
+  .pill { width:8px; height:8px; border-radius:50%; background:var(--off); }
+  .pill.ok { background:var(--ok); } .pill.bad { background:var(--bad); }
+  .card { background:var(--card); border-radius:14px; padding:20px; margin-bottom:16px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .card h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 14px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .dot { width:56px; height:56px; border-radius:50%; background:var(--off); transition:.15s; }
+  .dot.on { background:var(--on); box-shadow:0 0 24px var(--on); }
+  .state { font-size:1.6rem; font-weight:600; }
+  .btns { display:flex; gap:8px; margin-top:16px; }
+  button { flex:1; padding:12px; font-size:1rem; border:0; border-radius:10px; cursor:pointer; background:var(--off); color:var(--text); }
+  button.primary { background:var(--accent); color:#fff; }
+  .cam { position:relative; aspect-ratio:4/3; background:#000; border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center; }
+  .cam img { width:100%; height:100%; object-fit:contain; display:block; }
+  .cam span { position:absolute; color:#9ca3af; font-size:.9rem; }
+  .meta { color:var(--muted); font-size:.8rem; margin-top:8px; font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <h1>XIAO ESP32-S3 대시보드</h1>
+  <div class="sub"><span class="pill" id="pill"></span><span id="conn">연결 중…</span></div>
+
+  <section class="card">
+    <h2>LED</h2>
+    <div class="row">
+      <div class="state" id="ledText">-</div>
+      <div class="dot" id="ledDot"></div>
+    </div>
+    <div class="btns">
+      <button class="primary" onclick="setLed(true)">켜기</button>
+      <button onclick="setLed(false)">끄기</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>터치 센서 (D0)</h2>
+    <div class="row">
+      <div class="state" id="touchText">-</div>
+      <div class="dot" id="touchDot"></div>
+    </div>
+    <div class="meta" id="touchMeta"></div>
+  </section>
+
+  <section class="card">
+    <h2>카메라</h2>
+    <div class="cam"><img id="camImg" alt=""><span id="camMsg">스트리밍 꺼짐</span></div>
+    <div class="btns">
+      <button class="primary" id="camBtn" onclick="setCamera(!row?.camera)">스트리밍 시작</button>
+    </div>
+    <div class="meta" id="camMeta"></div>
+  </section>
+
+  <section class="card">
+    <h2>카메라 · Tailscale 실시간</h2>
+    <div class="cam"><img id="liveImg" alt=""><span id="liveMsg">꺼짐</span></div>
+    <div class="btns">
+      <button class="primary" id="liveBtn" onclick="toggleLive()">실시간 보기</button>
+    </div>
+    <div class="meta" id="liveMeta">Tailscale에 연결된 기기에서만 열립니다 (이 PC의 중계 서버가 켜져 있어야 함)</div>
+  </section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+// Anon/publishable key is meant to be public; access is limited by RLS in supabase/schema.sql
+const SUPABASE_URL = 'https://sreksnbkhipgpaybgrdw.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_dhf_aAB2fjCzQT8GiMez5A_sS9dx1q1';
+const DEVICE_ID = 'xiao-s3';
+const OFFLINE_AFTER_MS = 15000;  // device heartbeats every 5s
+
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const $ = id => document.getElementById(id);
+let row = null;
+
+function render() {
+  if (!row) return;
+  $('ledText').textContent = row.led ? '켜짐' : '꺼짐';
+  $('ledDot').classList.toggle('on', row.led);
+  $('touchText').textContent = row.touched ? '터치됨' : '대기';
+  $('touchDot').classList.toggle('on', row.touched);
+  $('camBtn').textContent = row.camera ? '스트리밍 중지' : '스트리밍 시작';
+  const fresh = Date.now() - lastFrame < 3000;
+  $('camMsg').textContent = !row.camera ? '스트리밍 꺼짐' : fresh ? '' : '프레임 대기 중…';
+  $('camImg').style.visibility = row.camera && fresh ? 'visible' : 'hidden';
+  $('camMeta').textContent = row.camera ? `${fps.toFixed(1)} fps · ${(frameBytes / 1024).toFixed(0)} KB/프레임` : '';
+  $('touchMeta').textContent = `값 ${row.touch_value ?? '-'} · 마지막 보고 ${new Date(row.updated_at).toLocaleTimeString()}`;
+  const online = Date.now() - new Date(row.updated_at) < OFFLINE_AFTER_MS;
+  $('conn').textContent = online ? '보드 온라인' : '보드 오프라인';
+  $('pill').className = 'pill ' + (online ? 'ok' : 'bad');
+}
+
+async function load() {
+  const { data, error } = await db.from('devices').select('*').eq('id', DEVICE_ID).single();
+  if (error) { $('conn').textContent = '오류: ' + error.message; $('pill').className = 'pill bad'; return; }
+  row = data; render();
+}
+
+async function update(fields) {
+  const { data, error } = await db.from('devices').update(fields).eq('id', DEVICE_ID).select().single();
+  if (error) { $('conn').textContent = '오류: ' + error.message; return; }
+  row = data; render();
+}
+
+const setLed = on => update({ led: on });
+const setCamera = on => update({ camera: on });
+
+// Frames arrive as base64 JPEG over Realtime broadcast; the board only sends while row.camera is true
+let lastFrame = 0, fps = 0, frameBytes = 0;
+db.channel('cam:' + DEVICE_ID)
+  .on('broadcast', { event: 'frame' }, ({ payload }) => {
+    const now = Date.now();
+    if (lastFrame) fps = fps * 0.8 + (1000 / (now - lastFrame)) * 0.2;
+    lastFrame = now;
+    frameBytes = payload.jpg.length * 3 / 4;
+    $('camImg').src = 'data:image/jpeg;base64,' + payload.jpg;
+    render();
+  })
+  .subscribe();
+
+// Full-rate MJPEG from the PC relay (relay/relay.mjs); Tailscale Serve keeps it tailnet-only
+const RELAY_STREAM = 'https://kimyunha.tail13f010.ts.net:8443/stream';
+let live = false;
+function toggleLive() {
+  live = !live;
+  const img = $('liveImg');
+  if (live) {
+    $('liveMsg').textContent = '연결 중…';
+    img.onerror = () => { $('liveMsg').textContent = '중계 서버에 연결할 수 없음 (Tailscale 연결·중계 서버 확인)'; img.style.visibility = 'hidden'; };
+    img.style.visibility = 'visible';
+    img.src = RELAY_STREAM;
+    const check = setInterval(() => {
+      if (!live) return clearInterval(check);
+      if (img.naturalWidth) { $('liveMsg').textContent = ''; clearInterval(check); }
+    }, 300);
+  } else {
+    img.removeAttribute('src');
+    img.style.visibility = 'hidden';
+    $('liveMsg').textContent = '꺼짐';
+  }
+  $('liveBtn').textContent = live ? '실시간 중지' : '실시간 보기';
+}
+
+// Stop the stream when the page closes so it doesn't use Realtime quota with nobody watching
+addEventListener('pagehide', () => {
+  if (!row?.camera) return;
+  fetch(`${SUPABASE_URL}/rest/v1/devices?id=eq.${DEVICE_ID}`, {
+    method: 'PATCH', keepalive: true,
+    headers: { apikey: SUPABASE_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ camera: false }),
+  });
+});
+
+db.channel('devices')
+  .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'devices', filter: `id=eq.${DEVICE_ID}` },
+      payload => { row = payload.new; render(); })
+  .subscribe();
+
+load();
+setInterval(render, 1000);  // refresh online indicator
+</script>
+</body>
+</html>

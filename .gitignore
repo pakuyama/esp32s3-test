@@ -1,0 +1,9 @@
+# Credentials - copy each secrets.example.h to secrets.h and fill in
+secrets.h
+WIFI.md
+relay/token.txt
+
+# Local / generated
+data/
+.vercel
+node_modules/
